@@ -106,6 +106,11 @@ class MultiSphereField(PrimitiveShapeField):
         return f"MultiSphereField(centers={self.centers}, radii={self.radii})"
 
     def compute_signed_distance_impl(self, x):
+
+        # Return uniform sdf if no obstacle
+        if len(self.centers) == 0:
+            return torch.ones_like(x[..., 0])
+
         distance_to_centers = torch.norm(x.unsqueeze(-2) - self.centers.unsqueeze(0), dim=-1)
         # sdfs = distance_to_centers - self.radii.unsqueeze(0)
         sdfs = distance_to_centers - self.radii
