@@ -1,4 +1,5 @@
 import os
+from functools import partial
 
 import numpy as np
 import torch
@@ -51,25 +52,39 @@ class PlanningVisualizer:
 
         return fig, ax
     
-    def render_multi_robot_trajectories(self, fig=None, ax=None, render_planner=False, 
+    def render_multi_robot_trajectories(self, fig=None, axs=None, render_planner=False, 
                                         start_goal_pairs=None, trajs=None, t=-1, **kwargs):
-        if fig is None or ax is None:
-            fig, ax = create_fig_and_axes(dim=self.env.dim)
+        """
+            Plot the first 10 trajectories in the results
+            Trajs: (B, T, N, H, D)
+        """
+        if fig is None or axs is None:
+            fig, axs = plt.subplots(2, 5, figsize=(15, 6), layout="tight")
+            axs = axs.flatten()
         if render_planner:
             self.planner.render(ax)
-        self.env.render(ax)
+        B, _, N, _, _ = trajs.shape
+        num_to_plot = min(B, 10)
         if trajs is not None:
-            num_agents = len(trajs)
-            for agent_idx in range(num_agents):
-                start_state, goal_state = start_goal_pairs[agent_idx]
-                self.robot.render(ax, start_state, color='green', cmap='Greens')
-                self.robot.render(ax, goal_state, color='green', cmap='Greens')
-                # Plot the first trajectory in the batch
-                agent_color = plt.cm.get_cmap("tab20")(agent_idx % 20)
-                traj = trajs[agent_idx, t, 0]
-                kwargs['colors'] = [agent_color]
-                kwargs['linewidth'] = [5]
-                self.robot.render_trajectories(ax, trajs=traj.unsqueeze(0), **kwargs)
+            for i in range(num_to_plot):
+                ax = axs[i]
+                ax.set_xticks([])
+                ax.set_yticks([])
+                ax.set_xticklabels([])
+                ax.set_yticklabels([])
+                ax.set_xlabel("")
+                ax.set_ylabel("")
+                self.env.render(ax)
+                # Plot each agent
+                for agent_idx in range(N):
+                    start_state, goal_state = start_goal_pairs[agent_idx]
+                    self.robot.render(ax, start_state, color='green', cmap='Greens')
+                    self.robot.render(ax, goal_state, color='red', cmap='Greens')
+                    agent_color = plt.cm.get_cmap("tab20")(agent_idx % 20)
+                    traj = trajs[i, t, agent_idx]
+                    kwargs['colors'] = [agent_color]
+                    kwargs['linewidth'] = [5]
+                    self.robot.render_trajectories(ax, trajs=traj.unsqueeze(0), **kwargs)
         return fig, ax
 
     def animate_robot_trajectories(
@@ -158,20 +173,22 @@ class PlanningVisualizer:
             if trajs is None:
                 return
 
-            num_agents, S, B, H, D = trajs.shape
-            print(trajs.shape)
+            B, T, N, H, D = trajs.shape
+            num_to_plot = min(B, 10)
 
-            fig, ax = create_fig_and_axes(dim=self.env.dim)
+            fig, axs = plt.subplots(2, 5, figsize=(15, 6), layout="tight")
+            axs = axs.flatten()
 
-            def animate_fn(i):
-                ax.clear()
-                ax.set_title(f"iter: {i}/{S-1}")
+            def animate_fn(i, axs):
+                # clear axs
+                for ax in axs:
+                    ax.clear()
                 self.render_multi_robot_trajectories(
-                    fig=fig, ax=ax, trajs=trajs,
+                    fig=fig, axs=axs, trajs=trajs,
                     start_goal_pairs=start_goal_pairs, t=i, **kwargs
                 )
             kwargs["video_filepath"] = "video.gif"
-            create_animation_video(fig, animate_fn, n_frames=S, **kwargs)
+            create_animation_video(fig, partial(animate_fn, axs=axs), n_frames=T, **kwargs)
 
     def plot_joint_space_state_trajectories(
             self,
