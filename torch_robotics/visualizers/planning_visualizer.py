@@ -63,17 +63,21 @@ class PlanningVisualizer:
             axs = axs.flatten()
         if render_planner:
             self.planner.render(ax)
-        B, _, N, _, _ = trajs.shape
+        B, T, N, H, D = trajs.shape
+        if t < 0:
+            t = T-1
+        fig.suptitle(f"Step {t} / {T-1}")
         num_to_plot = min(B, 10)
         if trajs is not None:
-            for i in range(num_to_plot):
-                ax = axs[i]
+            for b in range(num_to_plot):
+                ax = axs[b]
                 ax.set_xticks([])
                 ax.set_yticks([])
                 ax.set_xticklabels([])
                 ax.set_yticklabels([])
                 ax.set_xlabel("")
                 ax.set_ylabel("")
+
                 self.env.render(ax)
                 # Plot each agent
                 for agent_idx in range(N):
@@ -81,7 +85,7 @@ class PlanningVisualizer:
                     self.robot.render(ax, start_state, color='green', cmap='Greens')
                     self.robot.render(ax, goal_state, color='red', cmap='Greens')
                     agent_color = plt.cm.get_cmap("tab20")(agent_idx % 20)
-                    traj = trajs[i, t, agent_idx]
+                    traj = trajs[b, t, agent_idx, :, :]
                     kwargs['colors'] = [agent_color]
                     kwargs['linewidth'] = [5]
                     self.robot.render_trajectories(ax, trajs=traj.unsqueeze(0), **kwargs)
