@@ -51,7 +51,46 @@ class PlanningVisualizer:
             self.robot.render_trajectories(ax, trajs=traj_best.unsqueeze(0), **kwargs)
 
         return fig, ax
-    
+
+    def render_multi_robot_trajectories_steps(self, fig=None, axs=None, render_planner=False, 
+                                        start_goal_pairs=None, trajs=None, t=-1, **kwargs):
+        """
+            Plot the first 10 trajectories in the results
+            Trajs: (B, T, N, H, D)
+        """
+        if fig is None or axs is None:
+            fig, axs = plt.subplots(2, 3, figsize=(9, 6), layout="tight")
+            axs = axs.flatten()
+        if render_planner:
+            self.planner.render(ax)
+        B, T, N, H, D = trajs.shape
+        ts = [24, 19, 14, 9, 4, 0]
+        fig.suptitle(f"Step {t} / {T-1}")
+        num_to_plot = min(B, 10)
+        if trajs is not None:
+            for i, t in enumerate(ts):
+                ax = axs[i]
+                ax.set_xticks([])
+                ax.set_yticks([])
+                ax.set_xticklabels([])
+                ax.set_yticklabels([])
+                ax.set_xlabel("")
+                ax.set_ylabel("")
+
+                self.env.render(ax)
+                # Plot each agent
+                for agent_idx in range(N):
+                    start_state, goal_state = start_goal_pairs[agent_idx]
+                    self.robot.render(ax, start_state, color='green', cmap='Greens')
+                    self.robot.render(ax, goal_state, color='red', cmap='Greens')
+                    agent_color = plt.cm.get_cmap("tab20")(agent_idx % 20)
+                    traj = trajs[0, t, agent_idx, :, :]
+                    kwargs['colors'] = [agent_color]
+                    kwargs['linewidth'] = [5]
+                    self.robot.render_trajectories(ax, trajs=traj.unsqueeze(0), **kwargs)
+        return fig, ax
+
+   
     def render_multi_robot_trajectories(self, fig=None, axs=None, render_planner=False, 
                                         start_goal_pairs=None, trajs=None, t=-1, **kwargs):
         """
@@ -137,6 +176,53 @@ class PlanningVisualizer:
 
         create_animation_video(fig, animate_fn, n_frames=n_frames, **kwargs)
 
+    def animate_multi_robot_trajectories(
+        # TODO implement this
+                self, trajs=None, start_state=None, goal_state=None,
+                plot_trajs=False,
+                n_frames=10,
+                **kwargs
+        ):
+            if trajs is None:
+                return
+
+            assert trajs.ndim == 3
+            B, H, D = trajs.shape
+
+            idxs = np.round(np.linspace(0, H - 1, n_frames)).astype(int)
+            trajs_selection = trajs[:, idxs, :]
+
+            fig, ax = create_fig_and_axes(dim=self.env.dim)
+            def animate_fn(i):
+                ax.clear()
+                ax.set_title(f"step: {idxs[i]}/{H-1}")
+                if plot_trajs:
+                    self.render_robot_trajectories(
+                        fig=fig, ax=ax, trajs=trajs, start_state=start_state, goal_state=goal_state, **kwargs
+                    )
+                else:
+                    self.env.render(ax)
+
+                # TODO - implement batched version
+                qs = trajs_selection[:, i, :]  # batch, q_dim
+                if qs.ndim == 1:
+                    qs = qs.unsqueeze(0)  # interface (batch, q_dim)
+                for q in qs:
+                    self.robot.render(
+                        ax, q=q,
+                        color=self.colors_robot['collision'] if self.task.compute_collision(q, margin=0.0) else self.colors_robot['free'],
+                        arrow_length=0.1, arrow_alpha=0.5, arrow_linewidth=1.,
+                        cmap=self.cmaps['collision'] if self.task.compute_collision(q, margin=0.0) else self.cmaps['free'],
+                        **kwargs
+                    )
+
+                if start_state is not None:
+                    self.robot.render(ax, start_state, color='green', cmap='Greens')
+                if goal_state is not None:
+                    self.robot.render(ax, goal_state, color='purple', cmap='Purples')
+
+            create_animation_video(fig, animate_fn, n_frames=n_frames, **kwargs)
+
     def animate_opt_iters_robots(
             self, trajs=None, traj_best=None, start_state=None, goal_state=None,
             n_frames=10,
@@ -191,7 +277,7 @@ class PlanningVisualizer:
                     fig=fig, axs=axs, trajs=trajs,
                     start_goal_pairs=start_goal_pairs, t=i, **kwargs
                 )
-            kwargs["video_filepath"] = "video.gif"
+            kwargs["video_filepath"] = "opt_iters.gif"
             create_animation_video(fig, partial(animate_fn, axs=axs), n_frames=T, **kwargs)
 
     def plot_joint_space_state_trajectories(
