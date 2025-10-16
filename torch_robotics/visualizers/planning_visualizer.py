@@ -55,19 +55,20 @@ class PlanningVisualizer:
     def render_multi_robot_trajectories_steps(self, fig=None, axs=None, render_planner=False, 
                                         start_goal_pairs=None, trajs=None, t=-1, **kwargs):
         """
-            Plot the first 10 trajectories in the results
-            Trajs: (B, T, N, H, D)
+            Render denoising steps for one planning instance
+            Input: 
+                Trajs: (B, T, N, H, D)
         """
         if fig is None or axs is None:
             fig, axs = plt.subplots(2, 3, figsize=(9, 6), layout="tight")
             axs = axs.flatten()
         if render_planner:
             self.planner.render(ax)
-        B, T, N, H, D = trajs.shape
-        ts = [24, 19, 14, 9, 4, 0]
+        _, T, N, H, D = trajs.shape
+        ts = [24, 19, 14, 9, 4, 0] # decides the timesteps to render.
         fig.suptitle(f"Step {t} / {T-1}")
-        num_to_plot = min(B, 10)
         if trajs is not None:
+            trajs = trajs[0] # (T, N, H, D) render the first solution 
             for i, t in enumerate(ts):
                 ax = axs[i]
                 ax.set_xticks([])
@@ -76,7 +77,6 @@ class PlanningVisualizer:
                 ax.set_yticklabels([])
                 ax.set_xlabel("")
                 ax.set_ylabel("")
-
                 self.env.render(ax)
                 # Plot each agent
                 for agent_idx in range(N):
@@ -84,7 +84,7 @@ class PlanningVisualizer:
                     self.robot.render(ax, start_state, color='green', cmap='Greens')
                     self.robot.render(ax, goal_state, color='red', cmap='Greens')
                     agent_color = plt.cm.get_cmap("tab20")(agent_idx % 20)
-                    traj = trajs[0, t, agent_idx, :, :]
+                    traj = trajs[t, agent_idx] # always render the first result in batch
                     kwargs['colors'] = [agent_color]
                     kwargs['linewidth'] = [5]
                     self.robot.render_trajectories(ax, trajs=traj.unsqueeze(0), **kwargs)
@@ -177,51 +177,89 @@ class PlanningVisualizer:
         create_animation_video(fig, animate_fn, n_frames=n_frames, **kwargs)
 
     def animate_multi_robot_trajectories(
-        # TODO implement this
-                self, trajs=None, start_state=None, goal_state=None,
-                plot_trajs=False,
-                n_frames=10,
+                self,
+                start_goal_pairs=None,
+                trajs=None,
+                n_interpolation=10,
+                n_frames=5,
                 **kwargs
         ):
-            if trajs is None:
-                return
+        """
+            Given solution trajectory start_goal_pairs and solution trajectories, generate
+            video of agents following the waypoints and insert interpolation points between waypoints.
 
-            assert trajs.ndim == 3
-            B, H, D = trajs.shape
+            Input:
+                start_goal_pairs: start and goal location per-agent
+                trajs: (B, T, N, H, D) denoised trajectories
+        """
+        if trajs is None:
+            return
 
-            idxs = np.round(np.linspace(0, H - 1, n_frames)).astype(int)
-            trajs_selection = trajs[:, idxs, :]
+        assert trajs.ndim == 5, "Expected trajectories with shape (B, T, N, H, D)"
 
-            fig, ax = create_fig_and_axes(dim=self.env.dim)
-            def animate_fn(i):
-                ax.clear()
-                ax.set_title(f"step: {idxs[i]}/{H-1}")
-                if plot_trajs:
-                    self.render_robot_trajectories(
-                        fig=fig, ax=ax, trajs=trajs, start_state=start_state, goal_state=goal_state, **kwargs
-                    )
-                else:
-                    self.env.render(ax)
+        fig, ax = create_fig_and_axes(dim=self.env.dim)
+        final_trajs = trajs[0, -1]
 
-                # TODO - implement batched version
-                qs = trajs_selection[:, i, :]  # batch, q_dim
-                if qs.ndim == 1:
-                    qs = qs.unsqueeze(0)  # interface (batch, q_dim)
-                for q in qs:
-                    self.robot.render(
-                        ax, q=q,
-                        color=self.colors_robot['collision'] if self.task.compute_collision(q, margin=0.0) else self.colors_robot['free'],
-                        arrow_length=0.1, arrow_alpha=0.5, arrow_linewidth=1.,
-                        cmap=self.cmaps['collision'] if self.task.compute_collision(q, margin=0.0) else self.cmaps['free'],
-                        **kwargs
-                    )
+        def interpolate_trajectory(path, inserts):
+            if inserts <= 0 or path.shape[1] < 2:
+                return path
+            if isinstance(path, torch.Tensor):
+                alphas = torch.linspace(
+                    0.0, 1.0, inserts + 2, device=path.device, dtype=path.dtype
+                )[1:-1]
+                start = path[:, :-1]
+                delta = path[:, 1:] - start
+                interpolated = start.unsqueeze(2) + delta.unsqueeze(2) * alphas.view(1, 1, -1, 1)
+                stacked = torch.cat([start.unsqueeze(2), interpolated], dim=2)
+                stacked = stacked.reshape(path.shape[0], -1, path.shape[-1])
+                return torch.cat([stacked, path[:, -1:, :]], dim=1)
 
-                if start_state is not None:
-                    self.robot.render(ax, start_state, color='green', cmap='Greens')
-                if goal_state is not None:
-                    self.robot.render(ax, goal_state, color='purple', cmap='Purples')
+            path_np = np.asarray(path)
+            alphas_np = np.linspace(0.0, 1.0, inserts + 2)[1:-1]
+            start_np = path_np[:, :-1]
+            delta_np = path_np[:, 1:] - start_np
+            interpolated_np = start_np[:, :, None, :] + delta_np[:, :, None, :] * alphas_np[None, None, :, None]
+            stacked_np = np.concatenate([start_np[:, :, None, :], interpolated_np], axis=2)
+            stacked_np = stacked_np.reshape(path_np.shape[0], -1, path_np.shape[-1])
+            return np.concatenate([stacked_np, path_np[:, -1:, :]], axis=1)
 
-            create_animation_video(fig, animate_fn, n_frames=n_frames, **kwargs)
+        interp_final_trajs = interpolate_trajectory(final_trajs, n_interpolation)
+        interp_final_trajs = to_numpy(interp_final_trajs)
+        num_agents, num_steps, _ = interp_final_trajs.shape
+
+        frame_indices = np.arange(num_steps, dtype=int)
+        trail_window = max(int(n_frames), 1)
+
+        cmap = plt.cm.get_cmap("tab20")
+        agent_colors = [cmap(i % 20) for i in range(num_agents)]
+
+        def animate_fn(frame_idx):
+            ax.clear()
+            self.env.render(ax)
+
+            if start_goal_pairs is not None:
+                for start_state, goal_state in start_goal_pairs:
+                    if start_state is not None:
+                        self.robot.render(ax, start_state, color='green', cmap='Greens')
+                    if goal_state is not None:
+                        self.robot.render(ax, goal_state, color='purple', cmap='Purples')
+
+            step = frame_indices[frame_idx]
+            trail_start = max(0, step - trail_window + 1)
+
+            for agent_idx in range(num_agents):
+                trail_steps = range(trail_start, step + 1)
+                trail_length = len(trail_steps)
+                base_color = agent_colors[agent_idx]
+                rgb = base_color[:3]
+                for trail_pos, t_step in enumerate(trail_steps, start=1):
+                    alpha = trail_pos / trail_length
+                    color = (rgb[0], rgb[1], rgb[2], float(alpha))
+                    self.robot.render(ax, q=interp_final_trajs[agent_idx, t_step], color=color, cmap='Blues')
+
+            ax.set_title(f"step: {step}/{num_steps - 1}")
+
+        create_animation_video(fig, animate_fn, n_frames=len(frame_indices), **kwargs)
 
     def animate_opt_iters_robots(
             self, trajs=None, traj_best=None, start_state=None, goal_state=None,
@@ -259,27 +297,33 @@ class PlanningVisualizer:
                 self, start_goal_pairs=None, trajs=None,
                 **kwargs
         ):
-            # trajs: steps, batch, horizon, q_dim
-            if trajs is None:
-                return
+        """
+            Animate optimization iterations. 
+            
+            Input:
+                start_goal_pairs: start goal pairs for each agent.
+                trajs: (B, T, N, H, D) solution trajectories.
+        """
+        # trajs: steps, batch, horizon, q_dim
+        if trajs is None:
+            return
 
-            B, T, N, H, D = trajs.shape
-            num_to_plot = min(B, 10)
+        B, T, N, H, D = trajs.shape
 
-            fig, axs = plt.subplots(2, 5, figsize=(15, 6), layout="tight")
-            axs = axs.flatten()
+        fig, axs = plt.subplots(2, 5, figsize=(15, 6), layout="tight")
+        axs = axs.flatten()
 
-            def animate_fn(i, axs):
-                # clear axs
-                for ax in axs:
-                    ax.clear()
-                self.render_multi_robot_trajectories(
-                    fig=fig, axs=axs, trajs=trajs,
-                    start_goal_pairs=start_goal_pairs, t=i, **kwargs
-                )
-            kwargs["video_filepath"] = "opt_iters.gif"
-            create_animation_video(fig, partial(animate_fn, axs=axs), n_frames=T, **kwargs)
-
+        def animate_fn(i, axs):
+            # clear axs
+            for ax in axs:
+                ax.clear()
+            self.render_multi_robot_trajectories(
+                fig=fig, axs=axs, trajs=trajs,
+                start_goal_pairs=start_goal_pairs, t=i, **kwargs
+            )
+        kwargs["video_filepath"] = "opt_iters.gif"
+        create_animation_video(fig, partial(animate_fn, axs=axs), n_frames=T, **kwargs)
+        
     def plot_joint_space_state_trajectories(
             self,
             fig=None, axs=None,
