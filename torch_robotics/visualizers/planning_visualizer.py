@@ -321,7 +321,6 @@ class PlanningVisualizer:
                 fig=fig, axs=axs, trajs=trajs,
                 start_goal_pairs=start_goal_pairs, t=i, **kwargs
             )
-        kwargs["video_filepath"] = "opt_iters.gif"
         create_animation_video(fig, partial(animate_fn, axs=axs), n_frames=T, **kwargs)
         
     def plot_joint_space_state_trajectories(
